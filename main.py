@@ -57,11 +57,11 @@ user_sessions = {}
 
 async def ask_llm(user_id, text):
     try:
-        # Формат промпта для Llama 3.1 (текстовый режим)
+        # Новый формат для роутера Hugging Face
         prompt = f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{SYSTEM_PROMPT}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
         
         response = requests.post(
-            "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3.1-8B-Instruct",
+            f"https://api-inference.huggingface.co/pipeline/text-generation/meta-llama/Meta-Llama-3.1-8B-Instruct",
             headers={
                 "Authorization": f"Bearer {HF_API_KEY}",
                 "Content-Type": "application/json"
@@ -81,7 +81,6 @@ async def ask_llm(user_id, text):
             result = response.json()
             if isinstance(result, list) and len(result) > 0:
                 answer = result[0].get("generated_text", "").strip()
-                # Убираем лишние токены из ответа
                 if "<|eot_id|>" in answer:
                     answer = answer.split("<|eot_id|>")[0].strip()
                 if answer:
