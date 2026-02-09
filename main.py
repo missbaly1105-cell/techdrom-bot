@@ -4,23 +4,17 @@ from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import Message, Update
 from fastapi import FastAPI, Request
 import uvicorn
-from openai import AsyncOpenAI
-import httpx  # Добавлен импорт
+import requests
 
-# === НАСТРОЙКИ ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
 
-# Исправлено: явное создание http_client без прокси
-client = AsyncOpenAI(api_key=OPENAI_API_KEY, http_client=httpx.AsyncClient())
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 
-# === ПРОМПТ ===
-SYSTEM_PROMPT = """
-Ты — помощник детской IT-школы Технодром. Общаешься с родителями в Telegram. Твоя задача — помогать записываться на занятия, отвечать на вопросы и создавать ощущение тёплого, заботливого места для детей.
+SYSTEM_PROMPT = """Ты — помощник детской IT-школы Технодром. Общаешься с родителями в Telegram. Твоя задача — помогать записываться на занятия, отвечать на вопросы и создавать ощущение тёплого, заботливого места для детей.
 
 ❗ ВАЖНО:
 — Никогда не говори, что ты бот или ИИ. Ты — часть команды Технодром.
@@ -57,10 +51,8 @@ SYSTEM_PROMPT = """
 — Не оправдывайся за ограничения — мягко объясняй логику.
 — Не предлагай написать на почту — у нас нет email.
 
-Тон общения: тёплый, заботливый, как сотрудник, который любит своё дело. Короткие предложения. Без эмодзи или максимум 1–2 в начале диалога.
-"""
+Тон общения: тёплый, заботливый, как сотрудник, который любит своё дело. Короткие предложения. Без эмодзи или максимум 1–2 в начале диалога."""
 
-# Простая память
 user_sessions = {}
 
 async def ask_llm(user_id, text):
@@ -68,31 +60,58 @@ async def ask_llm(user_id, text):
         user_sessions[user_id] = []
     
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages += user_sessions[user_id]
+    for msg in user_sessions[user_id][-6:]:
+        messages.append(msg)
     messages.append({"role": "user", "content": text})
     
+    prompt = ""
+    for msg in messages:
+        role = "Система" if msg["role"] == "system" else "Родитель" if msg["role"] == "user" else "Ты"
+        prompt += f"{role}: {msg['content']}\n"
+    prompt += "Ты:"
+
     try:
-        resp = await client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.6
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct",
+            headers={
+                "Authorization": f"Bearer {HF_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "inputs": prompt,
+                "parameters": {
+                    "max_new_tokens": 250,
+                    "temperature": 0.7,
+                    "return_full_text": False
+                }
+            },
+            timeout=45
         )
-        answer = resp.choices[0].message.content.strip()
         
-        # Сохраняем историю
-        user_sessions[user_id].append({"role": "user", "content": text})
-        user_sessions[user_id].append({"role": "assistant", "content": answer})
-        
-        # Эскалация на администратора
-        if "уточню у администратора" in answer.lower():
-            await bot.send_message(
-                chat_id=ADMIN_ID,
-                text=f"⚠️ Нужна помощь!\n\nКлиент ID: {user_id}\n\nСообщение: {text}\n\nБот ответил: {answer}"
-            )
-        
-        return answer
+        if response.status_code == 200:
+            result = response.json()
+            if isinstance(result, list) and len(result) > 0:
+                answer = result[0].get("generated_text", "").strip()
+            else:
+                answer = str(result).strip()
+            
+            if not answer or len(answer) < 5:
+                answer = "Здравствуйте! Рад вас видеть 😊 Чем могу помочь сегодня?"
+            
+            user_sessions[user_id].append({"role": "user", "content": text})
+            user_sessions[user_id].append({"role": "assistant", "content": answer})
+            
+            if "уточню у администратора" in answer.lower() or "спрошу у администратора" in answer.lower():
+                await bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"⚠️ Нужна помощь!\n\nКлиент ID: {user_id}\n\nСообщение: {text}\n\nБот ответил: {answer}"
+                )
+            
+            return answer
+        else:
+            return "Здравствуйте! Рад вас видеть 😊 Чем могу помочь сегодня?"
+            
     except Exception as e:
-        print(f"Ошибка OpenAI: {e}")
         return "Здравствуйте! Рад вас видеть 😊 Чем могу помочь сегодня?"
 
 @router.message(F.text)
@@ -102,7 +121,6 @@ async def handle_message(message: Message):
 
 dp.include_router(router)
 
-# === FASTAPI для вебхуков ===
 app = FastAPI()
 
 @app.on_event("startup")
@@ -110,7 +128,6 @@ async def on_startup():
     base_url = os.getenv('RENDER_EXTERNAL_URL', 'https://techdrom-bot.onrender.com')
     webhook_url = f"{base_url}/webhook"
     await bot.set_webhook(url=webhook_url)
-    print(f"Вебхук установлен: {webhook_url}")
 
 @app.post("/webhook")
 async def webhook(request: Request):
