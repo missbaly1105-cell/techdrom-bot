@@ -5,9 +5,10 @@ from aiogram.types import Message, Update
 from fastapi import FastAPI, Request
 import uvicorn
 import requests
+import json
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-HF_API_KEY = os.getenv("HF_API_KEY")
+REPLICATE_API_KEY = os.getenv("REPLICATE_API_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
 
 bot = Bot(token=BOT_TOKEN)
@@ -59,60 +60,65 @@ async def ask_llm(user_id, text):
     if user_id not in user_sessions:
         user_sessions[user_id] = []
     
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    history = ""
     for msg in user_sessions[user_id][-6:]:
-        messages.append(msg)
-    messages.append({"role": "user", "content": text})
+        role = "Пользователь" if msg["role"] == "user" else "Ты"
+        history += f"{role}: {msg['content']}\n"
     
-    prompt = ""
-    for msg in messages:
-        role = "Система" if msg["role"] == "system" else "Родитель" if msg["role"] == "user" else "Ты"
-        prompt += f"{role}: {msg['content']}\n"
-    prompt += "Ты:"
-
+    prompt = f"{SYSTEM_PROMPT}\n\nИстория диалога:\n{history}\nПользователь: {text}\nТы:"
+    
     try:
         response = requests.post(
-            "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct",
+            "https://api.replicate.com/v1/predictions",
             headers={
-                "Authorization": f"Bearer {HF_API_KEY}",
+                "Authorization": f"Token {REPLICATE_API_KEY}",
                 "Content-Type": "application/json"
             },
             json={
-                "inputs": prompt,
-                "parameters": {
-                    "max_new_tokens": 250,
+                "version": "8f19256b502806e9d8c390c02d379f42c2c6109e5d8d421c8a344f4859b8de40",
+                "input": {
+                    "prompt": prompt,
+                    "max_tokens": 250,
                     "temperature": 0.7,
-                    "return_full_text": False
+                    "top_p": 0.9
                 }
             },
-            timeout=45
+            timeout=60
         )
         
-        if response.status_code == 200:
-            result = response.json()
-            if isinstance(result, list) and len(result) > 0:
-                answer = result[0].get("generated_text", "").strip()
-            else:
-                answer = str(result).strip()
+        if response.status_code != 201:
+            print(f"Replicate error {response.status_code}: {response.text}")
+            return "Секунду, уточняю детали..."
+        
+        prediction_id = response.json()["id"]
+        
+        for _ in range(30):
+            await asyncio.sleep(2)
+            result_resp = requests.get(
+                f"https://api.replicate.com/v1/predictions/{prediction_id}",
+                headers={"Authorization": f"Token {REPLICATE_API_KEY}"}
+            )
             
-            if not answer or len(answer) < 5:
-                answer = "Здравствуйте! Рад вас видеть 😊 Чем могу помочь сегодня?"
-            
-            user_sessions[user_id].append({"role": "user", "content": text})
-            user_sessions[user_id].append({"role": "assistant", "content": answer})
-            
-            if "уточню у администратора" in answer.lower() or "спрошу у администратора" in answer.lower():
-                await bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"⚠️ Нужна помощь!\n\nКлиент ID: {user_id}\n\nСообщение: {text}\n\nБот ответил: {answer}"
-                )
-            
-            return answer
-        else:
-            return "Здравствуйте! Рад вас видеть 😊 Чем могу помочь сегодня?"
+            if result_resp.status_code == 200:
+                result = result_resp.json()
+                if result["status"] == "succeeded":
+                    answer = result["output"][0].strip()
+                    if "уточню у администратора" in answer.lower() or "спрошу у администратора" in answer.lower():
+                        await bot.send_message(
+                            chat_id=ADMIN_ID,
+                            text=f"⚠️ Нужна помощь!\n\nКлиент ID: {user_id}\n\nСообщение: {text}\n\nБот ответил: {answer}"
+                        )
+                    user_sessions[user_id].append({"role": "user", "content": text})
+                    user_sessions[user_id].append({"role": "assistant", "content": answer})
+                    return answer
+                elif result["status"] in ["failed", "canceled"]:
+                    return "Секунду, уточняю детали..."
+        
+        return "Секунду, уточняю детали..."
             
     except Exception as e:
-        return "Здравствуйте! Рад вас видеть 😊 Чем могу помочь сегодня?"
+        print(f"Ошибка: {e}")
+        return "Секунду, уточняю детали..."
 
 @router.message(F.text)
 async def handle_message(message: Message):
