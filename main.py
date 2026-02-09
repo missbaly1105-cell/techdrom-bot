@@ -5,13 +5,15 @@ from aiogram.types import Message, Update
 from fastapi import FastAPI, Request
 import uvicorn
 from openai import AsyncOpenAI
+import httpx  # Добавлен импорт
 
 # === НАСТРОЙКИ ===
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "0"))
 
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+# Исправлено: явное создание http_client без прокси
+client = AsyncOpenAI(api_key=OPENAI_API_KEY, http_client=httpx.AsyncClient())
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
