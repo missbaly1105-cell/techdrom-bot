@@ -5,6 +5,7 @@ from aiogram.types import Message, Update
 from fastapi import FastAPI, Request
 import uvicorn
 import requests
+import json
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 HF_API_KEY = os.getenv("HF_API_KEY")
@@ -14,21 +15,40 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 
-SYSTEM_PROMPT = "Ты — помощник школы Технодром"
+SYSTEM_PROMPT = """Ты — помощник детской IT-школы Технодром. Общаешься с родителями в Telegram."""
 
 user_sessions = {}
 
 async def ask_llm(user_id, text):
     try:
+        # Правильный эндпоинт для чат-моделей Llama 3.1
         response = requests.post(
-            "https://router.huggingface.co",
-            headers={"Authorization": f"Bearer {HF_API_KEY}"},
-            json={"inputs": "Привет", "parameters": {"max_new_tokens": 10}},
-            timeout=10
+            "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3.1-8B-Instruct/v1/chat/completions",
+            headers={
+                "Authorization": f"Bearer {HF_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": text}
+                ],
+                "max_tokens": 250,
+                "temperature": 0.7
+            },
+            timeout=45
         )
-        return f"Статус: {response.status_code}\nОтвет: {response.text[:200]}"
+        
+        if response.status_code == 200:
+            data = response.json()
+            answer = data["choices"][0]["message"]["content"].strip()
+            return answer
+        else:
+            return f"Ошибка {response.status_code}: {response.text[:150]}"
+            
     except Exception as e:
-        return f"Исключение: {str(e)[:200]}"
+        return f"Исключение: {str(e)[:150]}"
 
 @router.message(F.text)
 async def handle_message(message: Message):
