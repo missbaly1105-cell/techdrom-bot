@@ -1,7 +1,7 @@
 import os
 import asyncio
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.types import Message
+from aiogram.types import Message, Update
 from fastapi import FastAPI, Request
 import uvicorn
 import openai
@@ -16,7 +16,7 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 router = Router()
 
-# === ПРОСТОЙ ПРОМПТ ДЛЯ ТЕСТА (ПОТОМ ЗАМЕНИ НА ПОЛНЫЙ) ===
+# === ПРОСТОЙ ПРОМПТ ДЛЯ ТЕСТА ===
 SYSTEM_PROMPT = "Ты — помощник детской IT-школы Технодром. Отвечай кратко и дружелюбно."
 
 # Простая память (в реальности лучше использовать базу)
@@ -65,8 +65,9 @@ app = FastAPI()
 
 @app.on_event("startup")
 async def on_startup():
-    # Получаем URL из Render
-    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_URL', 'techdrom-bot.onrender.com')}/webhook"
+    # ИСПРАВЛЕНО: не добавляем https:// дважды
+    base_url = os.getenv('RENDER_EXTERNAL_URL', 'https://techdrom-bot.onrender.com')
+    webhook_url = f"{base_url}/webhook"
     await bot.set_webhook(url=webhook_url)
 
 @app.post("/webhook")
