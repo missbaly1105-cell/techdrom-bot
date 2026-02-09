@@ -21,7 +21,7 @@ user_sessions = {}
 async def ask_llm(user_id, text):
     try:
         response = requests.post(
-            "https://api-inference.huggingface.co/models/meta-llama/Meta-Llama-3.1-8B-Instruct",
+            "https://router.huggingface.co",
             headers={"Authorization": f"Bearer {HF_API_KEY}"},
             json={"inputs": "Привет", "parameters": {"max_new_tokens": 10}},
             timeout=10
